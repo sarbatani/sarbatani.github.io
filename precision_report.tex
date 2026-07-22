@@ -1,0 +1,191 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=0.85in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\setlist[itemize]{topsep=1pt,itemsep=1pt,parsep=0pt,leftmargin=1.4em}
+\titlespacing*{\section}{0pt}{5pt}{1pt}
+\titlespacing*{\subsection}{0pt}{4pt}{1pt}
+\setlength{\parskip}{1pt}
+
+\title{\vspace{-2.5em}Precision, Conditioning, and Accurate Single-Precision\\
+Linear Algebra: Equilibration and Iterative Refinement}
+\author{Siamak Arbatani}
+\date{July 21, 2026}
+
+\begin{document}
+\maketitle
+\vspace{-2em}
+
+\noindent\small This report summarizes how floating-point \emph{precision} and matrix
+\emph{conditioning} together determine the \emph{accuracy} of a computed solution to
+$Ax=b$, and reviews two complementary families of methods---\emph{equilibration}
+(scaling) and \emph{iterative refinement}---that let single-precision factorizations
+deliver accuracy normally associated with double precision, with guidance on which suits
+which situation.\normalsize
+
+\section{Precision, accuracy, and the digit budget}
+
+Every IEEE floating-point format has a \emph{unit roundoff} $u$, the relative
+spacing of representable numbers, so that $\mathrm{fl}(a\circ b)=(a\circ b)(1+\delta)$
+with $|\delta|\le u$. The two formats of interest are
+
+\begin{center}\small
+\begin{tabular}{lccl}
+\toprule
+Format & bits (sig.) & unit roundoff $u$ & decimal digits \\
+\midrule
+\texttt{fp32} (single) & 24 & $2^{-24}\approx 6\times10^{-8}$ & $\sim$7--8 \\
+\texttt{fp64} (double) & 53 & $2^{-53}\approx 1.1\times10^{-16}$ & $\sim$15--16 \\
+\bottomrule
+\end{tabular}\normalsize
+\end{center}
+
+\noindent \emph{Precision} is a property of the format (how many digits are stored);
+\emph{accuracy} is a property of the answer (how many digits are correct). Precision
+sets a \emph{digit budget}; the condition number decides how much of it survives.
+
+\section{The condition number links precision to accuracy}
+
+For $Ax=b$ the relevant quantity is the $2$-norm condition number
+$\kappa_2(A)=\|A\|\,\|A^{-1}\|=\sigma_{\max}/\sigma_{\min}$, the amplification factor
+from input perturbations to output error. For a \emph{backward-stable} solver (Gaussian
+elimination with partial pivoting, QR), the governing \emph{rule of thumb} is
+\begin{equation}
+\frac{\|\hat{x}-x\|}{\|x\|}\;\lesssim\;\kappa(A)\,u
+\qquad\Longleftrightarrow\qquad
+\text{(digits of accuracy)}\;\approx\;\underbrace{-\log_{10}u}_{\text{digit budget}}
+-\underbrace{\log_{10}\kappa(A)}_{\text{digits spent}} .
+\label{eq:rule}
+\end{equation}
+This is Higham's ``forward error $\lesssim$ condition number $\times$ backward error.''
+The loss $\log_{10}\kappa(A)$ is a property of the \emph{problem} and its finite-precision
+data, not of the algorithm: even a perfect solver cannot avoid it. Consequently
+(Table~\ref{tab:thresh}) single precision starts to look marginal once
+$\kappa(A)\gtrsim10^{4}$ and is exhausted by $\kappa(A)\approx10^{7}$; double precision
+loses everything only around $\kappa(A)\approx10^{16}$. Two caveats: the bound is an
+upper bound (real errors are usually smaller), and for $\kappa(A)\gtrsim u^{-1}$ the
+computed $\kappa$ is itself unreliable. For least squares the sensitivity scales with
+$\kappa(A)^2$, so one must never form the normal equations $A^{\mathsf T}Ax=A^{\mathsf T}b$
+(which square the condition number)---use QR instead.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{lccl}
+\toprule
+$\kappa(A)$ & digits lost & digits left in \texttt{fp32} & verdict \\
+\midrule
+$1$--$10$ & 0--1 & $\sim$6--7 & excellent \\
+$10^{3}$  & 3    & $\sim$4    & fine for most uses \\
+$10^{4}$  & 5    & $\sim$2    & marginal / risky \\
+$10^{7}$  & 7    & $\sim$0    & single precision gone \\
+$\ge 10^{8}$ & $\ge 8$ & none & numerically singular in single \\
+\bottomrule
+\end{tabular}
+\caption{Single-precision digit loss versus conditioning. Shift every threshold up
+$\sim$9 orders of magnitude for double precision.}
+\label{tab:thresh}
+\end{table}\normalsize
+
+\noindent\textbf{When is single precision ``enough''?} When
+$\kappa(A)\cdot u_{\text{single}}$ is well below the accuracy target, i.e.
+$\kappa(A)\ll u_{\text{single}}^{-1}\approx10^{7}$. Well-conditioned tasks tolerant of
+noise---computer graphics, deep-learning training/inference, signal processing, many
+engineering FEM problems---live comfortably here. Ill-conditioned systems, tight-tolerance
+iterative solvers, and long-running simulations where error accumulates need double.
+
+\section{Getting single-precision speed with double-precision accuracy}
+
+Low precision is dramatically cheaper: GPU tensor cores run \texttt{fp16}/\texttt{bf16}/%
+\texttt{TF32} multiply--accumulate 8--16$\times$ faster than \texttt{fp32}. The goal is to do
+the $O(n^3)$ work in low precision yet recover accurate answers. Two complementary
+strategies achieve this: \emph{equilibration} preconditions the problem \emph{before}
+factoring; \emph{iterative refinement} corrects the solution \emph{after} factoring.
+
+\subsection{Equilibration (scaling) --- fix the conditioning first}
+
+Equilibration replaces $A$ by $\tilde A = RAC$ (diagonal $R$, $C$), or by a scaled and
+permuted $\tilde A = PRAC$, so that every row and column has comparable magnitude---%
+typically max-norm~$1$. Because a badly \emph{scaled} matrix has an artificially inflated
+$\kappa(A)$, rescaling can lower the condition number by many orders of magnitude and thus,
+via \eqref{eq:rule}, buy back accuracy directly. Liu's study of three max-norm
+equilibration schemes reports condition numbers dropping from, e.g., $10^{11}$--$10^{13}$
+to $10^{2}$--$10^{5}$:
+\begin{itemize}\itemsep2pt
+  \item \textbf{Bunch's algorithm} (symmetric $A$): a greedy one-line scaling
+  $\tilde A=DAD$, asymptotically optimal at $O(n+\mathrm{nnz})$---simplest and fastest.
+  \item \textbf{MC64 / Duff--Koster} (unsymmetric $A$): reduces scaling to a
+  minimum-weight bipartite matching that permutes large entries onto the diagonal, then
+  scales so $|\tilde a_{ij}|\le1$ with unit diagonal. This both improves conditioning and,
+  by making $A$ nearly diagonally dominant, stabilizes Gaussian elimination and can remove
+  the need for pivoting---valuable for sparse direct and preconditioned iterative solvers.
+  \item \textbf{Ruiz-type iteration (ALG3)}: repeatedly scales rows/columns by
+  $1/\sqrt{\|\cdot\|_\infty}$; general-purpose, converges linearly, works in any $p$-norm.
+\end{itemize}
+Equilibration is cheap preprocessing, but it is a \emph{heuristic}: it cannot help a matrix
+that is \emph{intrinsically} ill-conditioned (Liu reports cases where the condition number
+barely moves), and no algorithm optimally minimizes $\kappa$ for a general matrix.
+
+\subsection{Iterative refinement --- correct the solution afterward}
+
+Iterative refinement (IR) does the expensive factorization once in low precision, then
+cheaply polishes the result. The basic loop is
+\[
+r_k = b - A\hat{x}_k,\qquad A\,d_k = r_k,\qquad \hat{x}_{k+1}=\hat{x}_k+\omega\, d_k,
+\]
+reusing the low-precision $LU$ factors to solve each correction equation. The historic
+result (Langou et al.): factor in single, iterate with the double-precision residual, and
+recover \emph{full double-precision accuracy} for well-conditioned matrices at up to
+$\sim2\times$ the speed of a pure-double solve. Two refinements of the idea matter here:
+
+\begin{itemize}\itemsep2pt
+  \item \textbf{Three-precision IR (Carson \& Higham, 2018).} Using distinct precisions
+  for factorization $u_f$, working $u$, and residual $u_r$ decouples the roles: $u_f$ sets
+  the \emph{convergence limit}, $u_r$ the \emph{attainable accuracy}. Standard LU-based IR
+  converges for $\kappa(A)\lesssim10^{4}$ (half/single/double); solving the correction
+  equation with GMRES preconditioned by the low-precision $LU$ factors (GMRES-IR) weakens
+  the limit to $\kappa(A)\lesssim10^{8}$. This powers the HPL-MxP (HPL-AI) benchmark, which
+  reached hundreds of PFLOP/s on Summit for a task historically done entirely in \texttt{fp64}.
+  \item \textbf{The relaxation parameter (Smoktunowicz et al.).} Analyzing $IR(\omega)$
+  entirely in fixed working precision, they prove forward stability for $\omega\in(0,2)$
+  with limiting error $\|\hat{x}-x\|\lesssim c\,\varepsilon_M\,\kappa(A)\|x\|$, and show
+  both theoretically and numerically that $\omega=1$ (classical Wilkinson refinement) is
+  best. In their Wilkinson-matrix example GEPP alone is unstable, yet a \emph{single}
+  refinement step recovers the exact answer---so IR also repairs instability from a large
+  growth factor, provided $\varepsilon_M\,\kappa(A)$ is small.
+\end{itemize}
+The key limitation: IR converges only when the problem is not too ill-conditioned relative
+to the factorization precision; beyond those $\kappa$ limits it stalls, and GMRES-IR's
+iteration count (hence its speed advantage) is not guaranteed.
+
+\section{Which method for which case?}
+
+\begin{itemize}\itemsep2pt
+  \item \textbf{Poorly \emph{scaled} matrix (artificial ill-conditioning):} use
+  \textbf{equilibration}. If rows/columns span wildly different magnitudes, scaling alone
+  can restore single precision. It is cheap, done once, and---via MC64---also improves
+  pivoting stability and sparsity.
+  \item \textbf{Genuinely ill-conditioned but $\kappa(A)$ within IR limits, accuracy is the
+  goal:} use \textbf{iterative refinement}. It \emph{recovers} accuracy that scaling cannot
+  create: LU-based IR for $\kappa(A)\lesssim10^{4}$, GMRES-IR for $\kappa(A)\lesssim10^{8}$.
+  Choose $\omega=1$.
+  \item \textbf{Large dense systems on low-precision hardware (tensor cores, HPC):} use
+  \textbf{IR}, since the whole point is to run the $O(n^3)$ factorization in low precision
+  and cheaply refine---this is exactly HPL-MxP.
+  \item \textbf{Best practice --- combine them.} They are complementary: equilibrate first
+  to knock the condition number down (and improve stability), then apply mixed-precision IR
+  to reach the target accuracy. Duff--Koster explicitly pair scaling with reordering to
+  improve both direct and preconditioned iterative solves.
+\end{itemize}
+
+\noindent\textbf{Decision rule.} Estimate the conditioning cheaply first (LAPACK
+\texttt{xGECON}/\texttt{rcond}). If $\mathrm{RCOND}=1/\kappa \gg u_{\text{single}}$
+($\gtrsim10^{-5}$), single precision is safe as is; if it is small only because of scaling,
+\emph{equilibrate}; if intrinsically small but within the IR limits, \emph{refine}; if
+$\kappa(A)\gtrsim10^{8}$ even after scaling, escalate to full double precision.
+
+\end{document}

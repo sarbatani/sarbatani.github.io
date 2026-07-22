@@ -1,9 +1,83 @@
 <!DOCTYPE html>
-<html>
-    <head>
-        <title>Siamak Arbatani's homepage</title>
-    </head>
-    <body>
-        <p>This is page is under construction.</p>
-    </body>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Siamak Arbatani</title>
+  <meta name="description" content="Siamak Arbatani — computational mechanics. Notes and writing on numerical methods, simulation, and scientific computing.">
+  <link rel="stylesheet" href="assets/style.css">
+  <script>
+    /* Apply saved theme before first paint to avoid a flash. */
+    (function () {
+      try {
+        var t = localStorage.getItem('theme');
+        if (t) document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
+  <script src="assets/theme.js" defer></script>
+</head>
+<body>
+  <div class="wrap">
+
+    <header class="masthead">
+      <p class="site-name">Siamak Arbatani</p>
+      <p class="site-tagline">Computational mechanics</p>
+      <nav class="nav">
+        <a href="index.html">home</a>
+        <a href="#writing">writing</a>
+      </nav>
+    </header>
+
+    <section class="intro">
+      <p>I work in computational mechanics — numerical methods, simulation,
+      and the numerical analysis that keeps them trustworthy. This is where I
+      keep notes and longer write-ups on the problems I find interesting.</p>
+
+      <p class="contact">
+        <!-- Address is stored reversed and reassembled by JS, so no intact
+             address (and no "@"/"mailto:") ever appears in the page source. -->
+        <span id="email" data-u="inatabra.kamais" data-d="moc.liamg"><noscript>siamak&#46;arbatani&#32;[at]&#32;gmail&#32;[dot]&#32;com</noscript></span>
+      </p>
+    </section>
+
+    <p class="section-label" id="writing">Writing</p>
+    <ul class="posts">
+      <li>
+        <a href="posts/precision-conditioning-linear-algebra.html">
+          <span class="post-title">Precision, Conditioning, and Accurate Single-Precision Linear Algebra</span>
+          <span class="post-meta">2026-07-21 · report</span>
+          <span class="post-desc">How floating-point precision and matrix conditioning
+          together set the accuracy of a solution to <em>Ax = b</em>, and how
+          equilibration and iterative refinement let single-precision factorizations
+          reach double-precision accuracy.</span>
+        </a>
+      </li>
+    </ul>
+
+    <footer class="foot">
+      © 2026 Siamak Arbatani
+    </footer>
+
+  </div>
+
+  <script>
+    /* Rebuild the email link from reversed parts. Humans get a normal
+       clickable mailto; scanners scraping the HTML see only reversed
+       fragments with no "@" symbol to match on. */
+    (function () {
+      var el = document.getElementById('email');
+      if (!el) return;
+      var rev = function (s) { return s.split('').reverse().join(''); };
+      var addr = rev(el.getAttribute('data-u')) +
+                 String.fromCharCode(64) +
+                 rev(el.getAttribute('data-d'));
+      var a = document.createElement('a');
+      a.href = 'mailto:' + addr;
+      a.textContent = addr;
+      el.textContent = '';
+      el.appendChild(a);
+    })();
+  </script>
+</body>
 </html>
